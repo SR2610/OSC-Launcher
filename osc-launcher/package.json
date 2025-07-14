@@ -1,0 +1,42 @@
+{
+  "name": "osc-launcher",
+  "version": "1.0.0",
+  "description": "Listen for OSC and launch batch/EXE commands",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable"
+  },
+  "dependencies": {
+    "electron-store": "^8.1.0",
+    "osc": "^2.4.1"
+  },
+  "devDependencies": {
+    "electron": "^25.6.0",
+    "electron-packager": "^17.1.2",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.sr2610.osclauncher",
+    "productName": "OSC Launcher",
+    "asar": true,
+    "files": [
+      "!**/*.map",
+      "!**/*.ts",
+      "!**/ffmpeg*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/app-icon.ico",
+      "artifactName": "OSCLauncher-${version}.exe",
+      "compression": "maximum"
+    }
+  }
+}

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>OSC Launcher</title>
+  <style>
+    body, html { margin:0; padding:0; height:100%; font-family:sans-serif; }
+    #container { display:flex; height:100%; }
+    #list { width:30%; border-right:1px solid #ccc; padding:10px; box-sizing:border-box; }
+    #details { flex:1; padding:10px; box-sizing:border-box; }
+    .list-item { display:flex; justify-content:space-between; margin-bottom:5px; }
+    input[type=text] { width:100%; box-sizing:border-box; }
+    button { margin:5px 0; }
+  </style>
+  <link rel="stylesheet" href="index.css">
+
+</head>
+
+<body>
+  <div id="container">
+   <div id="list">
+  <div id="list-header">
+    <button id="add">+ Add Mapping</button>
+  </div>
+  <div id="items" class="scrollable">
+  </div>
+</div>
+    <div id="details">
+      <h3>Mapping Details</h3>
+
+      <label>Name:<br>
+        <input type="text" id="name" placeholder="e.g. Toggle Main Light" />
+      </label><br><br>
+
+      <label>OSC Address:<br>
+        <input type="text" id="addr" placeholder="/channel/1/255" />
+      </label><br><br>
+
+      <label>Command (exe/bat):<br>
+        <input type="text" id="filePath" readonly />
+        <button id="browse">Browse…</button>
+      </label><br><br>
+
+      <button id="save">Save</button>
+      <button id="cancel">Cancel</button>
+      <button id="delete" disabled>Delete</button>
+    </div>
+  </div>
+  <script src="./renderer.js"></script>
+</body>
+</html>
