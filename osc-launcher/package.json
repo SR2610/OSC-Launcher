@@ -1,6 +1,6 @@
 {
   "name": "osc-launcher",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Listen for OSC and launch batch/EXE commands",
   "main": "main.js",
   "scripts": {

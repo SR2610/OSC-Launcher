@@ -144,8 +144,12 @@ app.whenReady().then(() => {
 
   // Load saved mappings
   mappings = store.get("commands", []);
+  const oscPort = store.get("oscPort", 9000); // default 9000
+  store.set("oscPort", oscPort);
+
+
   // Start OSC listener
-  const udpPort = new osc.UDPPort({ localAddress: "0.0.0.0", localPort: 9000 });
+  const udpPort = new osc.UDPPort({ localAddress: "0.0.0.0", localPort: oscPort });
   udpPort.on("message", (msg) => {
     console.log(`[OSC] Received ${msg.address}`, msg); // log the raw OSC packet
 
