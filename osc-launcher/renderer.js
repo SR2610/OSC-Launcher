@@ -10,6 +10,7 @@ const saveBtn = document.getElementById("save");
 const cancelBtn = document.getElementById("cancel");
 const deleteBtn = document.getElementById("delete"); // ← new
 const browseBtn = document.getElementById("browse");
+const testBtn = document.getElementById("test");
 const nameInput = document.getElementById("name");
 const addrInput = document.getElementById("addr");
 const filePathInput = document.getElementById("filePath");
@@ -34,14 +35,11 @@ function renderList() {
 
 function editMapping(i) {
   selectedIndex = i;
-
-  // fill fields
   nameInput.value = mappings[i].name || "";
   addrInput.value = mappings[i].address;
   filePathInput.value = mappings[i].file;
-
-  // enable Delete
   deleteBtn.disabled = false;
+  updateTestEnabled(); // enable test if file exists
 }
 
 function deleteCurrent() {
@@ -55,8 +53,16 @@ function clearFields() {
   nameInput.value = "";
   addrInput.value = "";
   filePathInput.value = "";
-  deleteBtn.disabled = true; // disable when nothing selected
+  deleteBtn.disabled = true;
+  updateTestEnabled(); // disable test
 }
+
+function updateTestEnabled() {
+  testBtn.disabled = !filePathInput.value.trim();
+}
+
+filePathInput.addEventListener("input", updateTestEnabled);
+
 
 addBtn.onclick = () => {
   clearFields();
@@ -64,7 +70,10 @@ addBtn.onclick = () => {
 
 browseBtn.onclick = async () => {
   const file = await ipcRenderer.invoke("open-file-dialog");
-  if (file) filePathInput.value = file;
+  if (file) {
+    filePathInput.value = file;
+    updateTestEnabled();
+  }
 };
 
 saveBtn.onclick = async () => {
@@ -88,9 +97,17 @@ saveBtn.onclick = async () => {
   loadMappings();
 };
 
+testBtn.onclick = () => {
+  const file = filePathInput.value.trim();
+  if (!file) return;
+  ipcRenderer.invoke("test-command", { file });
+};
+
+
 cancelBtn.onclick = clearFields;
 
 deleteBtn.onclick = deleteCurrent; // ← hook up delete
 
 // initial load
 loadMappings();
+updateTestEnabled();

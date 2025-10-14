@@ -1,16 +1,50 @@
 <!DOCTYPE html>
 <html>
+
 <head>
   <meta charset="UTF-8">
   <title>OSC Launcher</title>
   <style>
-    body, html { margin:0; padding:0; height:100%; font-family:sans-serif; }
-    #container { display:flex; height:100%; }
-    #list { width:30%; border-right:1px solid #ccc; padding:10px; box-sizing:border-box; }
-    #details { flex:1; padding:10px; box-sizing:border-box; }
-    .list-item { display:flex; justify-content:space-between; margin-bottom:5px; }
-    input[type=text] { width:100%; box-sizing:border-box; }
-    button { margin:5px 0; }
+    body,
+    html {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      font-family: sans-serif;
+    }
+
+    #container {
+      display: flex;
+      height: 100%;
+    }
+
+    #list {
+      width: 30%;
+      border-right: 1px solid #ccc;
+      padding: 10px;
+      box-sizing: border-box;
+    }
+
+    #details {
+      flex: 1;
+      padding: 10px;
+      box-sizing: border-box;
+    }
+
+    .list-item {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 5px;
+    }
+
+    input[type=text] {
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    button {
+      margin: 5px 0;
+    }
   </style>
   <link rel="stylesheet" href="index.css">
 
@@ -18,13 +52,18 @@
 
 <body>
   <div id="container">
-   <div id="list">
-  <div id="list-header">
-    <button id="add">+ Add Mapping</button>
-  </div>
-  <div id="items" class="scrollable">
-  </div>
-</div>
+    <div id="list">
+      <div id="list-header" style="display:flex; gap:8px; align-items:center;">
+        <button id="add">+ Add Mapping</button>
+
+        <!-- New Play/Test button in sidebar -->
+        <button id="test" class="icon-btn" title="Test current mapping" disabled>
+          ▶
+        </button>
+      </div>
+
+      <div id="items" class="scrollable"></div>
+    </div>
     <div id="details">
       <h3>Mapping Details</h3>
 
@@ -48,4 +87,5 @@
   </div>
   <script src="./renderer.js"></script>
 </body>
+
 </html>

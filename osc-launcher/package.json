@@ -38,5 +38,7 @@
       "artifactName": "OSCLauncher-${version}.exe",
       "compression": "maximum"
     }
-  }
+  },
+  "author": "",
+  "license": "ISC"
 }

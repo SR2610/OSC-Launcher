@@ -11,6 +11,7 @@ const path = require("path");
 const Store = require("electron-store");
 const osc = require("osc");
 const { spawn, execFile } = require("child_process");
+const fs = require("fs");
 
 const store = new Store({ name: "mappings" });
 let mappings = [];
@@ -73,6 +74,48 @@ function createWindow() {
       e.preventDefault();
       mainWindow.hide();
     }
+  });
+}
+
+function runFile(filePath) {
+  return new Promise((resolve) => {
+    if (!filePath) {
+      return resolve({ ok: false, errorMessage: "No file path provided." });
+    }
+    if (!fs.existsSync(filePath)) {
+      return resolve({ ok: false, errorMessage: `File not found: ${filePath}` });
+    }
+
+    const ext = path.extname(filePath).toLowerCase();
+    let cmd, args;
+
+    // Choose the right host so scripts behave on Windows
+    if (ext === ".exe") {
+      cmd = filePath; args = [];
+    } else if (ext === ".bat" || ext === ".cmd") {
+      cmd = process.env.COMSPEC || "C:\\Windows\\System32\\cmd.exe";
+      args = ["/c", filePath];
+    } else if (ext === ".ps1") {
+      cmd = "powershell.exe";
+      args = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", filePath];
+    } else {
+      // Fallback: try to exec directly
+      cmd = filePath; args = [];
+    }
+
+    const child = spawn(cmd, args, { windowsHide: false });
+
+    let stdout = "", stderr = "";
+    child.stdout && child.stdout.on("data", (d) => (stdout += d.toString()));
+    child.stderr && child.stderr.on("data", (d) => (stderr += d.toString()));
+
+    child.on("error", (err) => {
+      resolve({ ok: false, errorMessage: err.message, stdout, stderr });
+    });
+    child.on("close", (code) => {
+      if (code === 0) resolve({ ok: true, stdout, stderr });
+      else resolve({ ok: false, errorMessage: `Exited with code ${code}`, stdout, stderr });
+    });
   });
 }
 
@@ -144,6 +187,16 @@ ipcMain.handle("save-mappings", (e, cmds) => {
   store.set("commands", cmds);
   mappings = cmds;
   return true;
+});
+
+ipcMain.handle("test-command", (e, { file }) => {
+  if (!file) return false;
+  try {
+    execFile(file, { windowsHide: false }, () => { /* no logging */ });
+    return true;
+  } catch {
+    return false;
+  }
 });
 
 app.on("window-all-closed", (e) => {
