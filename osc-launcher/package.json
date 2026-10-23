@@ -12,18 +12,35 @@
     "osc": "^2.4.1"
   },
   "devDependencies": {
-    "electron": "^25.6.0",
-    "electron-packager": "^17.1.2",
+    "electron": "^45.0.0",
     "electron-builder": "^26.0.12"
+  },
+  "overrides": {
+    "ws": "^8.18.0"
   },
   "build": {
     "appId": "com.sr2610.osclauncher",
     "productName": "OSC Launcher",
     "asar": true,
+    "removePackageScripts": true,
+    "removePackageKeywords": true,
     "files": [
+      "main.js",
+      "preload.js",
+      "index.html",
+      "index.css",
+      "renderer.js",
+      "assets/**/*",
+      "node_modules/**/*",
       "!**/*.map",
-      "!**/*.ts",
-      "!**/ffmpeg*"
+      "!**/*.md",
+      "!**/*.markdown",
+      "!**/test/**",
+      "!**/tests/**",
+      "!**/docs/**",
+      "!**/example/**",
+      "!**/examples/**",
+      "!node_modules/**/*.d.ts"
     ],
     "win": {
       "target": [
@@ -37,6 +54,10 @@
       "icon": "assets/app-icon.ico",
       "artifactName": "OSCLauncher-${version}.exe",
       "compression": "maximum"
+    },
+    "portable": {
+      "splashImage": null,
+      "unpackDirName": "osc-launcher"
     }
   },
   "author": "",

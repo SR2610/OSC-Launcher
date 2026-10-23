@@ -1,91 +1,359 @@
 <!DOCTYPE html>
-<html>
-
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>OSC Launcher</title>
-  <style>
-    body,
-    html {
-      margin: 0;
-      padding: 0;
-      height: 100%;
-      font-family: sans-serif;
-    }
-
-    #container {
-      display: flex;
-      height: 100%;
-    }
-
-    #list {
-      width: 30%;
-      border-right: 1px solid #ccc;
-      padding: 10px;
-      box-sizing: border-box;
-    }
-
-    #details {
-      flex: 1;
-      padding: 10px;
-      box-sizing: border-box;
-    }
-
-    .list-item {
-      display: flex;
-      justify-content: space-between;
-      margin-bottom: 5px;
-    }
-
-    input[type=text] {
-      width: 100%;
-      box-sizing: border-box;
-    }
-
-    button {
-      margin: 5px 0;
-    }
-  </style>
+  <script>
+    try {
+      const theme = localStorage.getItem("osc_theme") || "dark";
+      document.documentElement.setAttribute("data-theme", theme);
+    } catch (e) {}
+  </script>
   <link rel="stylesheet" href="index.css">
-
 </head>
-
 <body>
-  <div id="container">
-    <div id="list">
-      <div id="list-header" style="display:flex; gap:8px; align-items:center;">
-        <button id="add">+ Add Mapping</button>
+  <div id="app-wrapper">
+    <!-- Top Header -->
+    <header id="top-bar">
+      <div class="brand-section">
+        <span class="brand">OSC Launcher</span>
 
-        <!-- New Play/Test button in sidebar -->
-        <button id="test" class="icon-btn" title="Test current mapping" disabled>
-          ▶
-        </button>
+        <!-- Profiles Toolbar -->
+        <div class="profile-toolbar">
+          <span class="toolbar-label">Profile:</span>
+          <select id="profile-select" class="profile-select" title="Switch active show profile">
+            <option value="Default">Default</option>
+          </select>
+          <button id="new-profile-btn" class="profile-btn" title="Create a new profile">New</button>
+          <button id="delete-profile-btn" class="profile-btn" title="Delete the current profile">Delete</button>
+          <button id="export-profile-btn" class="profile-btn" title="Export profile to a JSON file">Export</button>
+          <button id="import-profile-btn" class="profile-btn" title="Import profile from a JSON file">Import</button>
+        </div>
       </div>
 
-      <div id="items" class="scrollable"></div>
+      <div class="top-controls">
+        <!-- Safety Lock (Single Clear Indicator) -->
+        <button id="lock-btn" class="btn-subtle lock-btn" title="Lock controls to prevent accidental changes during live performance">Lock: Off</button>
+
+        <!-- Relays -->
+        <button id="open-relays-btn" class="btn-subtle" title="Configure OSC packet forwarding destinations">
+          <span>Relays</span>
+          <span id="relays-count" class="badge-count">0</span>
+        </button>
+
+        <!-- Tasks -->
+        <button id="open-tasks-btn" class="btn-subtle" title="View running processes spawned by OSC Launcher">
+          <span>Tasks</span>
+          <span id="tasks-count" class="badge-count">0</span>
+        </button>
+
+        <!-- Settings -->
+        <button id="open-settings-btn" class="btn-subtle" title="Open appearance, network, security, and startup settings">
+          Settings
+        </button>
+
+        <!-- Status Indicator (Port configured in Settings) -->
+        <div id="connection-status" class="status-indicator" title="OSC receiver status. Click to open Settings.">
+          <span class="status-dot"></span>
+          <span id="status-text">Port 9000</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Container -->
+    <div id="container">
+      <!-- Left Sidebar -->
+      <aside id="list">
+        <div id="list-header">
+          <div class="list-actions">
+            <button id="add" style="flex:1;" title="Create a new OSC mapping">New Mapping</button>
+            <button id="test" class="btn-secondary" style="padding: 6px 12px;" title="Test and trigger the selected mapping" disabled>Test</button>
+          </div>
+          <input type="text" id="filter-input" placeholder="Search mappings..." title="Filter mappings by name or address" />
+        </div>
+        <div id="items"></div>
+      </aside>
+
+      <!-- Right Details Panel -->
+      <main id="details">
+        <h3 id="panel-title">Mapping Details</h3>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="name" title="Optional descriptive label for this mapping">Label / Name</label>
+            <input type="text" id="name" placeholder="e.g. Play Track 1" />
+          </div>
+
+          <div class="form-group">
+            <label for="addr" title="Incoming OSC address path. Supports wildcards: *, ?, [0-9], {a,b}">OSC Address</label>
+            <div class="input-with-action">
+              <input type="text" id="addr" placeholder="/track/1/play" />
+              <button type="button" id="learn-btn" class="learn-btn" title="Click to auto-capture the next received OSC address from a controller">Learn</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="action-type-select" title="Choose the action to perform when this OSC message is received">Action Type</label>
+            <select id="action-type-select">
+              <option value="launch">Launch command</option>
+              <option value="stop">Stop process</option>
+              <option value="toggle">Toggle (Launch or stop)</option>
+              <option value="sequence">Action sequence</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="filter-select" title="Condition required to trigger this action">Trigger Condition</label>
+            <select id="filter-select">
+              <option value="any">Any value received</option>
+              <option value="nonzero">Non-zero value only (> 0)</option>
+            </select>
+          </div>
+
+          <div class="form-group" style="max-width: 130px;">
+            <label for="debounce-input" title="Minimum milliseconds between triggers to prevent duplicate firing">Cooldown (ms)</label>
+            <input type="number" id="debounce-input" placeholder="0" min="0" step="50" value="0" />
+          </div>
+        </div>
+
+        <!-- Section: Single Command / Launch / Toggle Fields -->
+        <div id="section-command">
+          <div class="form-group">
+            <label for="filePath" title="Path to executable, batch file, or PowerShell script">Executable / Script</label>
+            <div class="file-row">
+              <input type="text" id="filePath" placeholder="C:\Path\to\script.bat" />
+              <button type="button" id="browse" class="secondary" title="Browse local file system for script or executable">Browse</button>
+              <input type="file" id="native-file-picker" style="display: none;" accept=".bat,.cmd,.exe,.ps1,.*" />
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="cwd" title="Working directory for script execution. Defaults to folder containing the script if blank">Working Directory</label>
+            <div class="file-row">
+              <input type="text" id="cwd" placeholder="Defaults to script folder" />
+              <button type="button" id="browse-cwd" class="secondary" title="Select custom working directory folder">Browse</button>
+              <input type="file" id="native-cwd-picker" style="display: none;" webkitdirectory directory />
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="custom-args" title="Optional command-line arguments passed when launching">Arguments</label>
+            <input type="text" id="custom-args" placeholder="e.g. --profile production --silent" />
+            <label class="checkbox-label" title="Append received OSC message argument values to the script arguments">
+              <input type="checkbox" id="forward-osc-args" />
+              <span>Forward incoming OSC arguments to script (%1, %2, etc.)</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Section: Bi-directional Feedback Drawer -->
+        <div class="form-group">
+          <label class="checkbox-label" title="Send OSC messages back to external controller indicating start, exit, or error">
+            <input type="checkbox" id="feedback-enabled" />
+            <span>Send execution status feedback via OSC</span>
+          </label>
+          <div id="feedback-settings" class="subpanel-box" style="display: none;">
+            <div class="form-row">
+              <div class="form-group">
+                <label for="feedback-host" title="IP address of controller receiving status feedback">Host</label>
+                <input type="text" id="feedback-host" placeholder="127.0.0.1" />
+              </div>
+              <div class="form-group" style="max-width: 90px;">
+                <label for="feedback-port" title="UDP port of controller receiving status feedback">Port</label>
+                <input type="number" id="feedback-port" placeholder="8000" />
+              </div>
+              <div class="form-group" style="flex: 2;">
+                <label for="feedback-addr" title="OSC address path for feedback message. Defaults to incoming address + /status">Feedback Address</label>
+                <input type="text" id="feedback-addr" placeholder="Defaults to /address/status" />
+              </div>
+            </div>
+            <small style="color:var(--muted); font-size:0.75rem;">
+              Sends float <code>1.0</code> on start, <code>0.0</code> on clean exit, and <code>-1.0</code> on error.
+            </small>
+          </div>
+        </div>
+
+        <!-- Section: Stop Process Fields -->
+        <div id="section-stop" style="display: none;">
+          <div class="form-group">
+            <label for="target-mapping-select" title="Select a launch or toggle mapping to kill its spawned process tree">Target Mapping</label>
+            <select id="target-mapping-select"></select>
+          </div>
+          <div class="form-group">
+            <label for="target-process-name" title="Or kill any process matching this executable name">Executable Name</label>
+            <input type="text" id="target-process-name" placeholder="e.g. vlc.exe, notepad.exe, obs64.exe" />
+            <small style="color:var(--muted); font-size:0.75rem; margin-top:4px; display:block;">
+              Entering an executable name takes precedence over the selected mapping above.
+            </small>
+          </div>
+        </div>
+
+        <!-- Section: Sequence Builder Fields -->
+        <div id="section-sequence" style="display: none;">
+          <label title="Ordered steps executed sequentially when triggered">Sequence Steps</label>
+          <div class="sequence-container">
+            <div id="sequence-steps-list" class="sequence-list">
+              <!-- Dynamically populated step cards -->
+            </div>
+            <div class="sequence-toolbar">
+              <button id="add-step-launch" class="secondary small" title="Add a command execution step">+ Command</button>
+              <button id="add-step-delay" class="secondary small" title="Add a pause delay step">+ Delay</button>
+              <button id="add-step-osc" class="secondary small" title="Add an outgoing OSC message step">+ Send OSC</button>
+              <button id="add-step-stop" class="secondary small" title="Add a process termination step">+ Stop Task</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="actions-row">
+          <button id="save" title="Save this mapping">Save Mapping</button>
+          <button id="cancel" class="secondary" title="Clear form inputs">Clear</button>
+          <button id="delete" class="danger" title="Delete this mapping" disabled>Delete</button>
+        </div>
+
+        <div id="statusMessage"></div>
+      </main>
     </div>
-    <div id="details">
-      <h3>Mapping Details</h3>
 
-      <label>Name:<br>
-        <input type="text" id="name" placeholder="e.g. Toggle Main Light" />
-      </label><br><br>
+    <!-- Bottom Live Monitor Bar -->
+    <footer id="live-monitor" title="Live incoming OSC packet monitor">
+      <div>
+        <span class="monitor-tag">LIVE OSC</span>
+        <span id="monitor-content">Listening for packets...</span>
+      </div>
+      <div id="monitor-timestamp">--:--:--</div>
+    </footer>
+  </div>
 
-      <label>OSC Address:<br>
-        <input type="text" id="addr" placeholder="/channel/1/255" />
-      </label><br><br>
+  <!-- Modal: Relays Manager -->
+  <div id="modal-relays" class="modal-overlay" style="display: none;">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h4>OSC Relays & Forwarding</h4>
+        <button id="close-relays-btn" class="icon-btn" title="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="color:var(--muted); font-size:0.8rem; margin-top:0;">
+          Incoming OSC packets are forwarded to all active destinations below.
+        </p>
+        <div id="relays-list"></div>
 
-      <label>Command (exe/bat):<br>
-        <input type="text" id="filePath" readonly />
-        <button id="browse">Browse…</button>
-      </label><br><br>
-
-      <button id="save">Save</button>
-      <button id="cancel">Cancel</button>
-      <button id="delete" disabled>Delete</button>
+        <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border);">
+          <strong style="font-size:0.82rem; color:var(--fg); display:block; margin-bottom:6px;">Add Destination</strong>
+          <div class="form-row">
+            <input type="text" id="new-relay-name" placeholder="Name (e.g. Resolume)" style="flex:1;" />
+            <input type="text" id="new-relay-host" placeholder="Host (127.0.0.1)" style="flex:1;" />
+            <input type="text" id="new-relay-port" placeholder="Port (7000)" style="width:80px;" />
+            <button id="add-relay-btn" class="small">Add</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="save-relays-btn">Save & Close</button>
+      </div>
     </div>
   </div>
+
+  <!-- Modal: Running Tasks Manager -->
+  <div id="modal-tasks" class="modal-overlay" style="display: none;">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h4>Active Tasks</h4>
+        <button id="close-tasks-btn" class="icon-btn" title="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="color:var(--muted); font-size:0.8rem; margin-top:0;">
+          Processes currently running that were launched by OSC Launcher.
+        </p>
+        <div id="tasks-list">
+          <p style="color:var(--muted); text-align:center; font-size:0.8rem;">No active processes running.</p>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="kill-all-tasks-btn" class="danger">Kill All</button>
+        <button id="close-tasks-footer-btn" class="secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Settings & Security -->
+  <div id="modal-settings" class="modal-overlay" style="display: none;">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h4>Preferences & Settings</h4>
+        <button id="close-settings-btn" class="icon-btn" title="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <!-- Appearance / Theme with Icons -->
+        <div class="form-group">
+          <label title="Interface color theme">Appearance</label>
+          <div class="theme-picker-group">
+            <button type="button" class="theme-option-btn" id="theme-dark-btn" title="Dark theme">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+              <span>Dark Theme</span>
+            </button>
+            <button type="button" class="theme-option-btn" id="theme-light-btn" title="Light theme">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+              <span>Light Theme</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="form-group" style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border);">
+          <label for="settings-port" title="Local UDP port listening for OSC commands">Receiver UDP Port</label>
+          <input type="number" id="settings-port" placeholder="9000" min="1024" max="65535" />
+          <small style="color:var(--muted); font-size:0.75rem;">Local UDP port listening for OSC commands.</small>
+        </div>
+
+        <div class="form-group">
+          <label for="settings-whitelist" title="Comma-separated IP addresses authorized to send OSC commands">Allowed IP Addresses</label>
+          <input type="text" id="settings-whitelist" placeholder="e.g. 127.0.0.1, 192.168.1.50 (leave empty to allow all)" />
+          <small style="color:var(--muted); font-size:0.75rem;">
+            Restricts execution to incoming packets arriving from authorized network devices.
+          </small>
+        </div>
+
+        <div class="form-group" style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border);">
+          <strong style="color:var(--fg); font-size:0.82rem; display:block; margin-bottom:8px;">Windows Startup</strong>
+          <label class="checkbox-label" title="Start OSC Launcher when Windows boots">
+            <input type="checkbox" id="settings-startup" />
+            <span>Launch automatically when Windows starts</span>
+          </label>
+          <label class="checkbox-label" style="margin-top:8px;" title="Start silently in system tray">
+            <input type="checkbox" id="settings-minimized" />
+            <span>Start minimized to system tray</span>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="save-settings-btn">Save Settings</button>
+        <button id="cancel-settings-btn" class="secondary">Cancel</button>
+      </div>
+    </div>
+  <!-- Modal: Create New Profile -->
+  <div id="modal-new-profile" class="modal-overlay" style="display: none;">
+    <div class="modal-dialog" style="width: 420px;">
+      <div class="modal-header">
+        <h4>New Show Profile</h4>
+        <button id="close-new-profile-btn" class="icon-btn" title="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group" style="margin-bottom:0;">
+          <label for="new-profile-name-input">Profile Name</label>
+          <input type="text" id="new-profile-name-input" placeholder="e.g. Concert, Rehearsal, Studio B" />
+          <small style="color:var(--muted); font-size:0.75rem; margin-top:6px; display:block;">
+            Profiles store isolated sets of mappings and relay routes for different shows or rooms.
+          </small>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="create-profile-confirm-btn">Create Profile</button>
+        <button id="cancel-new-profile-btn" class="secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <script src="./renderer.js"></script>
 </body>
-
 </html>
