@@ -1,0 +1,108 @@
+name: CI & Build
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-js:
+    name: JavaScript Tests
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: osc-launcher/package-lock.json
+
+      - name: Install dependencies
+        working-directory: osc-launcher
+        run: npm ci
+
+      - name: Run JS Unit Tests
+        working-directory: osc-launcher
+        run: npm test
+
+  test-rust:
+    name: Rust Check & Tests
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: osc-launcher/src-tauri
+
+      - name: Cargo Check
+        working-directory: osc-launcher/src-tauri
+        run: cargo check
+
+      - name: Cargo Test
+        working-directory: osc-launcher/src-tauri
+        run: cargo test --verbose
+
+  build-portable:
+    name: Build Portable Executable
+    needs: [test-js, test-rust]
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: osc-launcher/package-lock.json
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: osc-launcher/src-tauri
+
+      - name: Install Node dependencies
+        working-directory: osc-launcher
+        run: npm ci
+
+      - name: Build Standalone Executable
+        working-directory: osc-launcher
+        run: npm run tauri:build:portable
+
+      - name: Upload Portable Binary Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OSC-Launcher-Windows-x64
+          path: osc-launcher/src-tauri/target/release/osc-launcher.exe
+          if-no-files-found: error
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: osc-launcher/src-tauri/target/release/osc-launcher.exe
+          generate_release_notes: true

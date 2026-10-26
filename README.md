@@ -162,6 +162,23 @@ cd osc-launcher
 npm run dist
 ```
 
+### 5. Running Unit Tests
+```powershell
+# Run JavaScript unit tests (Node.js test runner)
+cd osc-launcher
+npm test
+
+# Run Rust unit tests
+cd src-tauri
+cargo test
+```
+
+### Continuous Integration (CI/CD)
+Automated testing and build workflows are configured via [GitHub Actions](.github/workflows/ci.yml):
+- **JS Tests**: Runs pattern matching and security tests on every push/PR.
+- **Rust Tests**: Executes `cargo check` and `cargo test` on Windows runner.
+- **Artifact Publishing**: Automatically compiles and uploads standalone `osc-launcher.exe` artifacts, and creates GitHub Releases on version tags (`v*`).
+
 ---
 
 ## Troubleshooting & FAQ

@@ -1589,3 +1589,146 @@ fn main() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_matches_osc_pattern_exact() {
+        assert!(matches_osc_pattern("/cue/1/go", "/cue/1/go"));
+        assert!(!matches_osc_pattern("/cue/1/go", "/cue/1/stop"));
+        assert!(!matches_osc_pattern("/cue/1/go", "/cue/2/go"));
+    }
+
+    #[test]
+    fn test_matches_osc_pattern_wildcards() {
+        assert!(matches_osc_pattern("/cue/*/start", "/cue/1/start"));
+        assert!(matches_osc_pattern("/cue/*/start", "/cue/media/start"));
+        assert!(!matches_osc_pattern("/cue/*/start", "/cue/1/2/start"));
+
+        assert!(matches_osc_pattern("/ch/?/mute", "/ch/1/mute"));
+        assert!(matches_osc_pattern("/ch/?/mute", "/ch/A/mute"));
+        assert!(!matches_osc_pattern("/ch/?/mute", "/ch/12/mute"));
+
+        assert!(matches_osc_pattern("/deck/{A,B}/play", "/deck/A/play"));
+        assert!(matches_osc_pattern("/deck/{A,B}/play", "/deck/B/play"));
+        assert!(!matches_osc_pattern("/deck/{A,B}/play", "/deck/C/play"));
+
+        assert!(matches_osc_pattern("/light/[1-4]", "/light/1"));
+        assert!(matches_osc_pattern("/light/[1-4]", "/light/4"));
+        assert!(!matches_osc_pattern("/light/[1-4]", "/light/5"));
+
+        assert!(matches_osc_pattern("/slot/[!0-9]", "/slot/A"));
+        assert!(!matches_osc_pattern("/slot/[!0-9]", "/slot/1"));
+    }
+
+    #[test]
+    fn test_mapping_deserialization() {
+        let json = r#"{
+            "id": "map-1",
+            "name": "Play Track",
+            "address": "/track/1/play",
+            "actionType": "launch",
+            "file": "C:\\scripts\\play.bat",
+            "args": "-v 100",
+            "debounceMs": 250,
+            "forwardOscArgs": true
+        }"#;
+
+        let mapping: Result<Mapping, _> = serde_json::from_str(json);
+        assert!(mapping.is_ok());
+        let m = mapping.unwrap();
+        assert_eq!(m.id, Some("map-1".to_string()));
+        assert_eq!(m.name, Some("Play Track".to_string()));
+        assert_eq!(m.address, "/track/1/play");
+        assert_eq!(m.action_type, Some("launch".to_string()));
+        assert_eq!(m.file, Some("C:\\scripts\\play.bat".to_string()));
+        assert_eq!(m.debounce_ms, Some(250));
+        assert_eq!(m.forward_osc_args, Some(true));
+    }
+
+    #[test]
+    fn test_sequence_step_deserialization() {
+        let json = r#"[
+            { "type": "delay", "delayMs": 1000 },
+            { "type": "launch", "file": "test.bat", "args": "run", "forwardOscArgs": false },
+            { "type": "osc", "host": "127.0.0.1", "port": 8000, "address": "/seq/done" },
+            { "type": "stop", "targetProcessName": "notepad.exe" }
+        ]"#;
+
+        let steps: Result<Vec<SequenceStep>, _> = serde_json::from_str(json);
+        assert!(steps.is_ok());
+        let steps = steps.unwrap();
+        assert_eq!(steps.len(), 4);
+        assert_eq!(steps[0].step_type, "delay");
+        assert_eq!(steps[0].delay_ms, Some(1000));
+        assert_eq!(steps[1].step_type, "launch");
+        assert_eq!(steps[2].step_type, "osc");
+        assert_eq!(steps[2].address, Some("/seq/done".to_string()));
+        assert_eq!(steps[3].step_type, "stop");
+        assert_eq!(steps[3].target_process_name, Some("notepad.exe".to_string()));
+    }
+
+    #[test]
+    fn test_app_config_defaults() {
+        let cfg = AppConfig::default();
+        assert_eq!(cfg.port, 9000);
+        assert_eq!(cfg.allowed_ips, "");
+        assert_eq!(cfg.start_minimized, false);
+    }
+
+    #[test]
+    fn test_store_file_roundtrip() {
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "Show1".to_string(),
+            vec![Mapping {
+                id: Some("1".to_string()),
+                name: Some("Test".to_string()),
+                address: "/test".to_string(),
+                action_type: Some("launch".to_string()),
+                filter: None,
+                debounce_ms: Some(100),
+                file: Some("echo.bat".to_string()),
+                cwd: None,
+                args: None,
+                forward_osc_args: None,
+                target_process_name: None,
+                target_mapping_key: None,
+                actions: None,
+                feedback_enabled: Some(true),
+                feedback_host: Some("127.0.0.1".to_string()),
+                feedback_port: Some(9001),
+                feedback_address: None,
+            }],
+        );
+
+        let store = StoreFile {
+            profiles,
+            active_profile: "Show1".to_string(),
+            relays: vec![Relay {
+                id: "r1".to_string(),
+                name: "Lighting".to_string(),
+                host: "10.0.0.5".to_string(),
+                port: 7000,
+                enabled: true,
+            }],
+            config: AppConfig {
+                port: 9005,
+                allowed_ips: "127.0.0.1".to_string(),
+                start_minimized: true,
+            },
+        };
+
+        let serialized = serde_json::to_string(&store).expect("Failed to serialize store");
+        let deserialized: StoreFile =
+            serde_json::from_str(&serialized).expect("Failed to deserialize store");
+
+        assert_eq!(deserialized.active_profile, "Show1");
+        assert_eq!(deserialized.config.port, 9005);
+        assert_eq!(deserialized.relays.len(), 1);
+        assert_eq!(deserialized.relays[0].name, "Lighting");
+        assert_eq!(deserialized.profiles.get("Show1").unwrap().len(), 1);
+    }
+}

@@ -104,50 +104,7 @@ function showWindow() {
   mainWindow.focus();
 }
 
-// OSC Pattern Matcher (supporting standard wildcards *, ?, [0-9], {a,b})
-function matchesOscPattern(pattern, address) {
-  if (!pattern || !address) return false;
-  if (pattern === address) return true;
-  try {
-    let reStr = "^";
-    let i = 0;
-    while (i < pattern.length) {
-      const c = pattern[i];
-      if (c === "*") {
-        reStr += "[^/]*";
-      } else if (c === "?") {
-        reStr += "[^/]";
-      } else if (c === "{") {
-        const end = pattern.indexOf("}", i);
-        if (end !== -1) {
-          const parts = pattern.slice(i + 1, end).split(",");
-          reStr += "(" + parts.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")";
-          i = end;
-        } else {
-          reStr += "\\{";
-        }
-      } else if (c === "[" && pattern.indexOf("]", i) !== -1) {
-        const end = pattern.indexOf("]", i);
-        const charSet = pattern.slice(i + 1, end);
-        if (charSet.startsWith("!")) {
-          reStr += "[^" + charSet.slice(1) + "]";
-        } else {
-          reStr += "[" + charSet + "]";
-        }
-        i = end;
-      } else if ("()+|^$.#\\".includes(c)) {
-        reStr += "\\" + c;
-      } else {
-        reStr += c;
-      }
-      i++;
-    }
-    reStr += "$";
-    return new RegExp(reStr).test(address);
-  } catch {
-    return pattern === address;
-  }
-}
+const { matchesOscPattern } = require("./osc-utils");
 
 // IP Whitelist Check
 function isIpAllowed(remoteAddress) {
