@@ -90,3 +90,13 @@ typings/
 
 # Electron-Forge
 out/
+
+# Rust / Cargo / Tauri
+target/
+src-tauri/target/
+src-tauri/gen/
+dist-tauri/
+**/*.rs.bk
+Cargo.lock
+
+

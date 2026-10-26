@@ -1,4 +1,40 @@
-const api = window.oscApi;
+function getApi() {
+  if (window.oscApi) return window.oscApi;
+  if (window.__TAURI__) {
+    const invoke = window.__TAURI__.core ? window.__TAURI__.core.invoke : window.__TAURI__.invoke;
+    const listen = window.__TAURI__.event ? window.__TAURI__.event.listen : window.__TAURI__.listen;
+    return {
+      openFileDialog: (opts) => invoke("open_file_dialog", { directory: Boolean(opts && opts.directory) }),
+      getMappings: () => invoke("get_mappings"),
+      saveMappings: (mappings) => invoke("save_mappings", { mappings }),
+      testCommand: (payload) => invoke("test_command", payload),
+      testSequence: (payload) => invoke("test_sequence", payload),
+      getConfig: () => invoke("get_config"),
+      saveConfig: (config) => invoke("save_config", { config }),
+      getRelays: () => invoke("get_relays"),
+      saveRelays: (relays) => invoke("save_relays", { relays }),
+      getActiveProcesses: () => invoke("get_active_processes"),
+      killProcess: (payload) => invoke("kill_process", payload),
+      getProfiles: () => invoke("get_profiles"),
+      switchProfile: (name) => invoke("switch_profile", { name }),
+      createProfile: (name) => invoke("create_profile", { name }),
+      deleteProfile: (name) => invoke("delete_profile", { name }),
+      exportProfile: () => invoke("export_profile"),
+      importProfile: () => invoke("import_profile"),
+      getStartupSettings: () => invoke("get_startup_settings"),
+      setStartupSettings: (settings) => invoke("set_startup_settings", settings),
+      openConfigLocation: () => invoke("open_config_location"),
+      getConfigPath: () => invoke("get_config_path"),
+      openExternalUrl: (url) => invoke("open_external_url", { url }),
+      onOscPacket: (cb) => listen("osc-packet", (e) => cb(e.payload)),
+      onOscError: (cb) => listen("osc-error", (e) => cb(e.payload)),
+      onActiveProcessesChanged: (cb) => listen("active-processes", (e) => cb(e.payload)),
+    };
+  }
+  return {};
+}
+
+const api = getApi();
 
 let mappings = [];
 let relays = [];
@@ -10,6 +46,7 @@ let currentFilterQuery = "";
 let currentSequence = [];
 let isLearning = false;
 let isLocked = false;
+let isBrowsing = false;
 
 // Theme Controller (Configured in Preferences & Settings modal)
 function getInitialTheme() {
@@ -325,27 +362,33 @@ function renderSequenceSteps() {
       argsStepInput.oninput = (e) => (step.args = e.target.value);
 
       browseStepBtn.onclick = async () => {
-        if (api && typeof api.openFileDialog === "function") {
-          try {
-            const file = await api.openFileDialog();
-            if (file) {
-              step.file = file;
-              fileStepInput.value = file;
-              return;
+        if (isLocked || isBrowsing) return;
+        isBrowsing = true;
+        try {
+          if (api && typeof api.openFileDialog === "function") {
+            try {
+              const file = await api.openFileDialog();
+              if (file) {
+                step.file = file;
+                fileStepInput.value = file;
+              }
+            } catch (err) {
+              console.warn("api.openFileDialog failed:", err);
             }
-          } catch (err) {
-            console.warn("api.openFileDialog failed:", err);
+            return;
           }
-        }
-        if (nativeFilePicker) {
-          nativeFilePicker.value = "";
-          nativeFilePicker.onchange = (e) => {
-            if (e.target.files && e.target.files.length > 0) {
-              step.file = e.target.files[0].path || e.target.files[0].name;
-              fileStepInput.value = step.file;
-            }
-          };
-          nativeFilePicker.click();
+          if (nativeFilePicker) {
+            nativeFilePicker.value = "";
+            nativeFilePicker.onchange = (e) => {
+              if (e.target.files && e.target.files.length > 0) {
+                step.file = e.target.files[0].path || e.target.files[0].name;
+                fileStepInput.value = step.file;
+              }
+            };
+            nativeFilePicker.click();
+          }
+        } finally {
+          setTimeout(() => { isBrowsing = false; }, 250);
         }
       };
     } else if (step.type === "delay") {
@@ -700,59 +743,69 @@ addBtn.onclick = () => {
 
 // Browse script file
 browseBtn.onclick = async () => {
-  if (isLocked) return;
-  if (api && typeof api.openFileDialog === "function") {
-    try {
-      const file = await api.openFileDialog();
-      if (file) {
-        filePathInput.value = file;
-        updateTestEnabled();
-        clearStatus();
-        return;
+  if (isLocked || isBrowsing) return;
+  isBrowsing = true;
+  try {
+    if (api && typeof api.openFileDialog === "function") {
+      try {
+        const file = await api.openFileDialog();
+        if (file) {
+          filePathInput.value = file;
+          updateTestEnabled();
+          clearStatus();
+        }
+      } catch (err) {
+        console.warn("api.openFileDialog threw:", err);
       }
-    } catch (err) {
-      console.warn("api.openFileDialog threw, falling back to input:", err);
+      return;
     }
-  }
 
-  if (nativeFilePicker) {
-    nativeFilePicker.value = "";
-    nativeFilePicker.onchange = (e) => {
-      const files = e.target.files;
-      if (files && files.length > 0) {
-        filePathInput.value = files[0].path || files[0].name;
-        updateTestEnabled();
-        clearStatus();
-      }
-    };
-    nativeFilePicker.click();
+    if (nativeFilePicker) {
+      nativeFilePicker.value = "";
+      nativeFilePicker.onchange = (e) => {
+        const files = e.target.files;
+        if (files && files.length > 0) {
+          filePathInput.value = files[0].path || files[0].name;
+          updateTestEnabled();
+          clearStatus();
+        }
+      };
+      nativeFilePicker.click();
+    }
+  } finally {
+    setTimeout(() => { isBrowsing = false; }, 250);
   }
 };
 
 // Browse working directory
 browseCwdBtn.onclick = async () => {
-  if (isLocked) return;
-  if (api && typeof api.openFileDialog === "function") {
-    try {
-      const dir = await api.openFileDialog({ directory: true });
-      if (dir) {
-        cwdInput.value = dir;
-        return;
+  if (isLocked || isBrowsing) return;
+  isBrowsing = true;
+  try {
+    if (api && typeof api.openFileDialog === "function") {
+      try {
+        const dir = await api.openFileDialog({ directory: true });
+        if (dir) {
+          cwdInput.value = dir;
+        }
+      } catch (err) {
+        console.warn("api.openFileDialog directory threw:", err);
       }
-    } catch (err) {
-      console.warn("api.openFileDialog directory threw:", err);
+      return;
     }
-  }
 
-  if (nativeCwdPicker) {
-    nativeCwdPicker.value = "";
-    nativeCwdPicker.onchange = (e) => {
-      const files = e.target.files;
-      if (files && files.length > 0) {
-        cwdInput.value = files[0].path || files[0].webkitRelativePath || "";
-      }
-    };
-    nativeCwdPicker.click();
+    if (nativeCwdPicker) {
+      nativeCwdPicker.value = "";
+      nativeCwdPicker.onchange = (e) => {
+        const files = e.target.files;
+        if (files && files.length > 0) {
+          cwdInput.value = files[0].path || files[0].webkitRelativePath || "";
+        }
+      };
+      nativeCwdPicker.click();
+    }
+  } finally {
+    setTimeout(() => { isBrowsing = false; }, 250);
   }
 };
 
@@ -1004,6 +1057,15 @@ openSettingsBtn.onclick = async () => {
     settingsMinimizedCheckbox.checked = Boolean(startup.startMinimized);
     applyTheme(getInitialTheme());
 
+    if (api && typeof api.getConfigPath === "function") {
+      const cfgPath = await api.getConfigPath();
+      const pathEl = document.getElementById("settings-config-path");
+      if (pathEl && cfgPath) {
+        pathEl.textContent = cfgPath;
+        pathEl.title = cfgPath;
+      }
+    }
+
     modalSettings.style.display = "flex";
   } catch (err) {
     showStatus(`Failed to load settings: ${err.message}`, true);
@@ -1048,6 +1110,48 @@ saveSettingsBtn.onclick = async () => {
     alert(`Error saving settings: ${err.message}`);
   }
 };
+
+const openConfigBtn = document.getElementById("open-config-btn");
+const openDocsBtn = document.getElementById("open-docs-btn");
+
+if (openConfigBtn) {
+  openConfigBtn.onclick = async () => {
+    if (api && typeof api.openConfigLocation === "function") {
+      try {
+        await api.openConfigLocation();
+      } catch (err) {
+        alert("Failed to open configuration folder: " + err);
+      }
+    }
+  };
+}
+
+if (openDocsBtn) {
+  openDocsBtn.onclick = async () => {
+    const docsUrl = "https://github.com/SR2610/OSC-Launcher#readme";
+    if (api && typeof api.openExternalUrl === "function") {
+      try {
+        await api.openExternalUrl(docsUrl);
+        return;
+      } catch (err) {
+        console.warn("openExternalUrl failed:", err);
+      }
+    }
+    window.open(docsUrl, "_blank");
+  };
+}
+
+const runtimeBadge = document.getElementById("settings-runtime-badge");
+if (runtimeBadge) {
+  if (window.__TAURI__) {
+    runtimeBadge.textContent = "Tauri (Rust)";
+  } else if (window.oscApi) {
+    runtimeBadge.textContent = "Electron";
+  } else {
+    runtimeBadge.textContent = "Web Browser";
+  }
+}
+
 
 // Live OSC packets (Single source: #live-monitor)
 if (api && api.onOscPacket) {

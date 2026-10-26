@@ -137,3 +137,13 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Rust / Cargo / Tauri
+**/target/
+**/src-tauri/target/
+**/src-tauri/gen/
+**/dist-tauri/
+**/*.rs.bk
+Cargo.lock
+
+

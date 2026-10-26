@@ -1,0 +1,22 @@
+[package]
+name = "osc-launcher"
+version = "1.1.0"
+description = "Listen for OSC and launch commands"
+authors = ["SR2610"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-ico"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-shell = "2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rosc = "0.10"
+regex = "1.10"
+tokio = { version = "1", features = ["full"] }
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "5.0"
+

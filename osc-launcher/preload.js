@@ -20,6 +20,10 @@ contextBridge.exposeInMainWorld("oscApi", {
   importProfile: () => ipcRenderer.invoke("import-profile"),
   getStartupSettings: () => ipcRenderer.invoke("get-startup-settings"),
   setStartupSettings: (settings) => ipcRenderer.invoke("set-startup-settings", settings),
+  openConfigLocation: () => ipcRenderer.invoke("open-config-location"),
+  getConfigPath: () => ipcRenderer.invoke("get-config-path"),
+  openExternalUrl: (url) => ipcRenderer.invoke("open-external-url", url),
+
   onOscPacket: (callback) => {
     ipcRenderer.on("osc-packet", (_event, data) => callback(data));
   },

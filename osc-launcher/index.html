@@ -325,6 +325,37 @@
             <span>Start minimized to system tray</span>
           </label>
         </div>
+
+        <!-- Data Storage & Documentation -->
+        <div class="form-group" style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border);">
+          <strong style="color:var(--fg); font-size:0.82rem; display:block; margin-bottom:8px;">Data Storage & Help</strong>
+          <div style="display:flex; flex-direction:column; gap:10px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+              <div style="flex:1; min-width:0;">
+                <span style="font-size:0.8rem; font-weight:500; display:block; color:var(--fg);">Configuration Location</span>
+                <code id="settings-config-path" style="font-size:0.72rem; color:var(--muted); display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:2px;">%APPDATA%\osc-launcher\mappings.json</code>
+              </div>
+              <button type="button" class="secondary small" id="open-config-btn" title="Open the mappings configuration folder in Windows Explorer">
+                Open Location
+              </button>
+            </div>
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+              <div>
+                <span style="font-size:0.8rem; font-weight:500; display:block; color:var(--fg);">Documentation</span>
+                <span style="font-size:0.72rem; color:var(--muted); display:block;">Quick-start guide, OSC syntax, and examples.</span>
+              </div>
+              <button type="button" class="secondary small" id="open-docs-btn" title="Open documentation on GitHub">
+                View Docs
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- About & Runtime details -->
+        <div style="margin-top:14px; padding-top:10px; border-top:1px solid var(--border); display:flex; align-items:center; justify-content:space-between;">
+          <span style="font-size:0.75rem; color:var(--muted);">OSC Launcher <span id="settings-app-version">v1.1.0</span></span>
+          <span id="settings-runtime-badge" style="font-size:0.72rem; color:var(--muted); background:var(--bg-card); padding:2px 8px; border-radius:4px; border:1px solid var(--border);">Tauri Core</span>
+        </div>
       </div>
       <div class="modal-footer">
         <button id="save-settings-btn">Save Settings</button>

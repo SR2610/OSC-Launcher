@@ -5,13 +5,18 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win portable"
+    "dist": "electron-builder --win portable",
+    "tauri": "npx @tauri-apps/cli",
+    "tauri:dev": "npx @tauri-apps/cli dev",
+    "tauri:build": "npx @tauri-apps/cli build",
+    "tauri:build:portable": "npx @tauri-apps/cli build --no-bundle"
   },
   "dependencies": {
     "electron-store": "^8.1.0",
     "osc": "^2.4.1"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0",
     "electron": "^45.0.0",
     "electron-builder": "^26.0.12"
   },

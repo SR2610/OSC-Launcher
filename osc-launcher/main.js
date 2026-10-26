@@ -877,6 +877,20 @@ ipcMain.handle("set-startup-settings", (e, { openAtLogin, startMinimized }) => {
   return { ok: true };
 });
 
+// IPC: storage and documentation
+ipcMain.handle("open-config-location", () => {
+  shell.showItemInFolder(store.path);
+  return true;
+});
+
+ipcMain.handle("get-config-path", () => store.path);
+
+ipcMain.handle("open-external-url", (e, url) => {
+  if (url) shell.openExternal(url);
+  return true;
+});
+
+
 // IPC: test single command
 ipcMain.handle("test-command", async (e, { file, args = "", cwd = null }) => {
   if (!file) return { ok: false, errorMessage: "No file path provided." };
