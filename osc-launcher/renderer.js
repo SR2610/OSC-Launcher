@@ -26,9 +26,12 @@ function getApi() {
       openConfigLocation: () => invoke("open_config_location"),
       getConfigPath: () => invoke("get_config_path"),
       openExternalUrl: (url) => invoke("open_external_url", { url }),
+      getActivityLogs: () => invoke("get_activity_logs"),
+      clearActivityLogs: () => invoke("clear_activity_logs"),
       onOscPacket: (cb) => listen("osc-packet", (e) => cb(e.payload)),
       onOscError: (cb) => listen("osc-error", (e) => cb(e.payload)),
       onActiveProcessesChanged: (cb) => listen("active-processes", (e) => cb(e.payload)),
+      onActivityLog: (cb) => listen("activity-log", (e) => cb(e.payload)),
     };
   }
   return {};
@@ -479,6 +482,11 @@ newProfileBtn.addEventListener("click", () => {
 
 if (closeNewProfileBtn) closeNewProfileBtn.onclick = () => (modalNewProfile.style.display = "none");
 if (cancelNewProfileBtn) cancelNewProfileBtn.onclick = () => (modalNewProfile.style.display = "none");
+if (modalNewProfile) {
+  modalNewProfile.addEventListener("click", (e) => {
+    if (e.target === modalNewProfile) modalNewProfile.style.display = "none";
+  });
+}
 
 if (createProfileConfirmBtn) {
   createProfileConfirmBtn.addEventListener("click", async () => {
@@ -1150,6 +1158,99 @@ if (runtimeBadge) {
   } else {
     runtimeBadge.textContent = "Web Browser";
   }
+}
+
+// Activity Log Modal
+let activityLogs = [];
+
+const openActivityBtn = document.getElementById("open-activity-btn");
+const modalActivity = document.getElementById("modal-activity");
+const closeActivityBtn = document.getElementById("close-activity-btn");
+const closeActivityFooterBtn = document.getElementById("close-activity-footer-btn");
+const activityLogListEl = document.getElementById("activity-log-list");
+const copyActivityBtn = document.getElementById("copy-activity-btn");
+const clearActivityBtn = document.getElementById("clear-activity-btn");
+const liveMonitorEl = document.getElementById("live-monitor");
+
+function renderActivityLogs(logs) {
+  if (!activityLogListEl) return;
+  activityLogListEl.innerHTML = "";
+  if (!logs || !logs.length) {
+    activityLogListEl.innerHTML = `<p style="color:var(--muted); text-align:center; padding:20px; font-family:var(--font);">No activity recorded yet.</p>`;
+    return;
+  }
+
+  logs.forEach((entry) => {
+    const row = document.createElement("div");
+    row.className = "activity-entry";
+
+    let statusClass = "";
+    if (entry.status && entry.status.startsWith("Started")) statusClass = "started";
+    else if (entry.status && entry.status.startsWith("Finished")) statusClass = "success";
+    else if (entry.status && (entry.status.startsWith("Exited") || entry.status.startsWith("Error"))) statusClass = "error";
+
+    row.innerHTML = `
+      <span class="activity-time">${entry.timestamp || ""}</span>
+      <span class="activity-addr">${entry.address}</span>
+      <span class="activity-name">${entry.actionName || entry.file}</span>
+      <span class="activity-status ${statusClass}">${entry.status}</span>
+    `;
+    activityLogListEl.appendChild(row);
+  });
+}
+
+async function openActivityModal() {
+  if (api && typeof api.getActivityLogs === "function") {
+    try {
+      activityLogs = (await api.getActivityLogs()) || [];
+    } catch (err) {
+      console.warn("Failed to fetch activity logs:", err);
+    }
+  }
+  renderActivityLogs(activityLogs);
+  if (modalActivity) modalActivity.style.display = "flex";
+}
+
+if (openActivityBtn) openActivityBtn.onclick = openActivityModal;
+if (liveMonitorEl) liveMonitorEl.onclick = openActivityModal;
+if (closeActivityBtn) closeActivityBtn.onclick = () => (modalActivity.style.display = "none");
+if (closeActivityFooterBtn) closeActivityFooterBtn.onclick = () => (modalActivity.style.display = "none");
+if (modalActivity) {
+  modalActivity.addEventListener("click", (e) => {
+    if (e.target === modalActivity) modalActivity.style.display = "none";
+  });
+}
+
+if (clearActivityBtn) {
+  clearActivityBtn.onclick = async () => {
+    activityLogs = [];
+    if (api && typeof api.clearActivityLogs === "function") {
+      await api.clearActivityLogs();
+    }
+    renderActivityLogs(activityLogs);
+  };
+}
+
+if (copyActivityBtn) {
+  copyActivityBtn.onclick = () => {
+    if (!activityLogs.length) return;
+    const text = activityLogs
+      .map((l) => `[${l.timestamp}] ${l.address} -> ${l.actionName || l.file} [${l.status}] (PID: ${l.pid || "-"})`)
+      .join("\n");
+    navigator.clipboard.writeText(text).then(() => {
+      showStatus("Activity log copied to clipboard.");
+    });
+  };
+}
+
+if (api && api.onActivityLog) {
+  api.onActivityLog((entry) => {
+    activityLogs.push(entry);
+    if (activityLogs.length > 100) activityLogs.shift();
+    if (modalActivity && modalActivity.style.display === "flex") {
+      renderActivityLogs(activityLogs);
+    }
+  });
 }
 
 

@@ -16,7 +16,11 @@ use serde::{Deserialize, Serialize};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tokio::process::Command as TokioCommand;
 use tokio::sync::Mutex;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -96,6 +100,19 @@ pub struct ActiveProcessInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityLogEntry {
+    pub id: String,
+    pub timestamp: String,
+    pub address: String,
+    pub args: String,
+    pub action_name: String,
+    pub file: String,
+    pub status: String,
+    pub pid: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoreFile {
     pub profiles: HashMap<String, Vec<Mapping>>,
     pub active_profile: String,
@@ -125,6 +142,7 @@ pub struct AppState {
     pub active_processes: Arc<Mutex<HashMap<String, ActiveProcessInfo>>>,
     pub last_trigger_times: Arc<Mutex<HashMap<String, u64>>>,
     pub is_listener_running: Arc<AtomicBool>,
+    pub activity_logs: Arc<Mutex<Vec<ActivityLogEntry>>>,
 }
 
 fn get_config_dir() -> PathBuf {
@@ -182,11 +200,9 @@ fn matches_osc_pattern(pattern: &str, address: &str) -> bool {
                     re_str.push_str(&format!("[{}]", set));
                 }
             }
-            c if "()+|^$.#\\".contains(c) => {
-                re_str.push('\\');
-                re_str.push(c);
+            c => {
+                re_str.push_str(&regex::escape(&c.to_string()));
             }
-            c => re_str.push(c),
         }
     }
     re_str.push('$');
@@ -275,35 +291,38 @@ async fn kill_process_by_name(name: &str) -> Result<(), String> {
     }
 }
 
-fn spawn_command(
+async fn spawn_command(
     file: &str,
     args: &[String],
     cwd: Option<&str>,
-) -> Result<u32, String> {
+) -> Result<(u32, tokio::process::Child), String> {
     let path = Path::new(file);
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
 
     let mut cmd = if ext == "bat" || ext == "cmd" {
-        let mut c = Command::new("cmd.exe");
+        let mut c = TokioCommand::new("cmd.exe");
         c.arg("/c").arg(file);
         for a in args {
             c.arg(a);
         }
         c
     } else if ext == "ps1" {
-        let mut c = Command::new("powershell.exe");
+        let mut c = TokioCommand::new("powershell.exe");
         c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", file]);
         for a in args {
             c.arg(a);
         }
         c
     } else {
-        let mut c = Command::new(file);
+        let mut c = TokioCommand::new(file);
         for a in args {
             c.arg(a);
         }
         c
     };
+
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
 
     if let Some(dir) = cwd.filter(|d| !d.trim().is_empty()) {
         cmd.current_dir(dir);
@@ -312,7 +331,8 @@ fn spawn_command(
     }
 
     let child = cmd.spawn().map_err(|e| e.to_string())?;
-    Ok(child.id())
+    let pid = child.id().ok_or_else(|| "Failed to obtain process PID".to_string())?;
+    Ok((pid, child))
 }
 
 fn save_store(state: &AppState) {
@@ -336,11 +356,101 @@ fn save_store(state: &AppState) {
         };
 
         if let Ok(json) = serde_json::to_string_pretty(&data) {
-            let _ = fs::write(&store_path, json);
+            // Atomic save via .tmp
+            let tmp_path = store_path.with_extension("tmp");
+            if fs::write(&tmp_path, &json).is_ok() {
+                let _ = fs::rename(&tmp_path, &store_path);
+            }
+
+            // Rolling Show Backups (maintain last 10 in /backups)
+            if let Some(parent) = store_path.parent() {
+                let backup_dir = parent.join("backups");
+                let _ = fs::create_dir_all(&backup_dir);
+                let backup_file = backup_dir.join(format!(
+                    "mappings_{}.json",
+                    chrono::Local::now().format("%Y%m%d_%H%M%S")
+                ));
+                let _ = fs::write(&backup_file, &json);
+
+                if let Ok(entries) = fs::read_dir(&backup_dir) {
+                    let mut files: Vec<PathBuf> = entries
+                        .filter_map(|e| e.ok().map(|e| e.path()))
+                        .filter(|p| p.extension().map_or(false, |ext| ext == "json"))
+                        .collect();
+                    files.sort();
+                    if files.len() > 10 {
+                        for old in files.iter().take(files.len() - 10) {
+                            let _ = fs::remove_file(old);
+                        }
+                    }
+                }
+            }
         }
     });
 }
 
+fn restore_from_latest_backup(store_path: &Path) -> Option<StoreFile> {
+    let parent = store_path.parent()?;
+    let backup_dir = parent.join("backups");
+    if !backup_dir.exists() {
+        return None;
+    }
+    let entries = fs::read_dir(&backup_dir).ok()?;
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().map_or(false, |ext| ext == "json"))
+        .collect();
+    files.sort();
+    files.reverse();
+
+    for backup in files {
+        if let Ok(content) = fs::read_to_string(&backup) {
+            if let Ok(store) = serde_json::from_str::<StoreFile>(&content) {
+                eprintln!("[Recovery] Restored configuration from {:?}", backup);
+                let _ = fs::write(store_path, &content);
+                return Some(store);
+            }
+        }
+    }
+    None
+}
+
+async fn log_activity(
+    app: &AppHandle,
+    address: &str,
+    args: &[serde_json::Value],
+    action_name: &str,
+    file: &str,
+    status: &str,
+    pid: Option<u32>,
+) {
+    let state = app.state::<AppState>();
+    let formatted_args = if args.is_empty() {
+        "-".to_string()
+    } else {
+        serde_json::to_string(args).unwrap_or_default()
+    };
+
+    let entry = ActivityLogEntry {
+        id: format!("{}-{}", now_millis(), pid.unwrap_or(0)),
+        timestamp: chrono::Local::now().format("%H:%M:%S%.3f").to_string(),
+        address: address.to_string(),
+        args: formatted_args,
+        action_name: action_name.to_string(),
+        file: file.to_string(),
+        status: status.to_string(),
+        pid,
+    };
+
+    let mut logs = state.activity_logs.lock().await;
+    logs.push(entry.clone());
+    if logs.len() > 100 {
+        logs.remove(0);
+    }
+    let _ = app.emit("activity-log", entry);
+}
+
+// Event-driven IOCP UDP socket listener
 fn start_osc_listener(app_handle: AppHandle, port: u16) {
     let state = app_handle.state::<AppState>();
     let is_running = state.is_listener_running.clone();
@@ -349,43 +459,49 @@ fn start_osc_listener(app_handle: AppHandle, port: u16) {
     let app_handle_clone = app_handle.clone();
 
     tauri::async_runtime::spawn(async move {
-        let socket = match UdpSocket::bind(format!("0.0.0.0:{}", port)) {
-            Ok(s) => s,
+        let socket = match tokio::net::UdpSocket::bind(format!("0.0.0.0:{}", port)).await {
+            Ok(s) => Arc::new(s),
             Err(e) => {
                 let _ = app_handle_clone.emit("osc-error", format!("Port {} error: {}", port, e));
                 return;
             }
         };
 
-        let _ = socket.set_nonblocking(true);
         let mut buf = [0u8; 65535];
 
         while is_running.load(Ordering::SeqCst) {
-            match socket.recv_from(&mut buf) {
-                Ok((size, remote_addr)) => {
-                    let state = app_handle_clone.state::<AppState>();
-                    let allowed_ips = {
-                        let c = state.config.lock().await;
-                        c.allowed_ips.clone()
-                    };
+            tokio::select! {
+                res = socket.recv_from(&mut buf) => {
+                    match res {
+                        Ok((size, remote_addr)) => {
+                            let state = app_handle_clone.state::<AppState>();
+                            let allowed_ips = {
+                                let c = state.config.lock().await;
+                                c.allowed_ips.clone()
+                            };
 
-                    if !allowed_ips.trim().is_empty() {
-                        let ip_str = remote_addr.ip().to_string();
-                        let allowed: Vec<&str> = allowed_ips.split(',').map(|s| s.trim()).collect();
-                        if !allowed.contains(&ip_str.as_str()) {
-                            continue;
+                            if !allowed_ips.trim().is_empty() {
+                                let ip_str = remote_addr.ip().to_string();
+                                let allowed: Vec<&str> = allowed_ips.split(',').map(|s| s.trim()).collect();
+                                if !allowed.contains(&ip_str.as_str()) {
+                                    continue;
+                                }
+                            }
+
+                            if let Ok((_, packet)) = rosc::decoder::decode_udp(&buf[..size]) {
+                                process_incoming_packet(&app_handle_clone, packet, &socket).await;
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("[OSC UDP Error]: {}", e);
+                            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
                         }
                     }
-
-                    if let Ok((_, packet)) = rosc::decoder::decode_udp(&buf[..size]) {
-                        process_incoming_packet(&app_handle_clone, packet, &socket).await;
+                }
+                _ = tokio::time::sleep(tokio::time::Duration::from_millis(250)) => {
+                    if !is_running.load(Ordering::SeqCst) {
+                        break;
                     }
-                }
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
-                }
-                Err(_) => {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
                 }
             }
         }
@@ -395,7 +511,7 @@ fn start_osc_listener(app_handle: AppHandle, port: u16) {
 async fn process_incoming_packet(
     app: &AppHandle,
     packet: OscPacket,
-    socket: &UdpSocket,
+    socket: &Arc<tokio::net::UdpSocket>,
 ) {
     match packet {
         OscPacket::Message(msg) => {
@@ -407,7 +523,7 @@ async fn process_incoming_packet(
     }
 }
 
-async fn unpack_bundle(app: &AppHandle, bundle: OscBundle, socket: &UdpSocket) {
+async fn unpack_bundle(app: &AppHandle, bundle: OscBundle, socket: &Arc<tokio::net::UdpSocket>) {
     for p in bundle.content {
         match p {
             OscPacket::Message(msg) => {
@@ -420,10 +536,9 @@ async fn unpack_bundle(app: &AppHandle, bundle: OscBundle, socket: &UdpSocket) {
     }
 }
 
-async fn handle_osc_message(app: &AppHandle, msg: OscMessage, socket: &UdpSocket) {
+async fn handle_osc_message(app: &AppHandle, msg: OscMessage, socket: &Arc<tokio::net::UdpSocket>) {
     let state = app.state::<AppState>();
 
-    // Format args for live UI monitor
     let formatted_args: Vec<serde_json::Value> = msg
         .args
         .iter()
@@ -452,7 +567,7 @@ async fn handle_osc_message(app: &AppHandle, msg: OscMessage, socket: &UdpSocket
             if r.enabled {
                 if let Ok(encoded) = encoder::encode(&OscPacket::Message(msg.clone())) {
                     let dest = format!("{}:{}", r.host, r.port);
-                    let _ = socket.send_to(&encoded, dest);
+                    let _ = socket.send_to(&encoded, &dest).await;
                 }
             }
         }
@@ -482,39 +597,38 @@ async fn handle_osc_message(app: &AppHandle, msg: OscMessage, socket: &UdpSocket
                 if val <= 0.0 {
                     continue;
                 }
+            } else {
+                continue;
             }
         }
 
-        // Debounce rate limit check
-        let mapping_key = hit.id.clone().unwrap_or_else(|| hit.address.clone());
-        if let Some(debounce) = hit.debounce_ms {
-            if debounce > 0 {
-                let now = now_millis();
-                let mut last_times = state.last_trigger_times.lock().await;
-                let last = last_times.get(&mapping_key).copied().unwrap_or(0);
-                if now - last < debounce {
-                    continue;
-                }
-                last_times.insert(mapping_key.clone(), now);
-            }
-        }
-
-        // Execute action
-        execute_mapping(app, hit, &formatted_args).await;
+        handle_mapping_trigger(app, hit, formatted_args.clone()).await;
     }
 }
 
-async fn execute_mapping(
+async fn handle_mapping_trigger(
     app: &AppHandle,
     hit: Mapping,
-    osc_args: &[serde_json::Value],
+    osc_args: Vec<serde_json::Value>,
 ) {
     let state = app.state::<AppState>();
-    let action_type = hit.action_type.as_deref().unwrap_or("launch");
     let mapping_key = hit.id.clone().unwrap_or_else(|| hit.address.clone());
+
+    // Debounce check
+    if let Some(cooldown) = hit.debounce_ms.filter(|&c| c > 0) {
+        let now = now_millis();
+        let mut last_times = state.last_trigger_times.lock().await;
+        if let Some(&last) = last_times.get(&mapping_key) {
+            if now < last + cooldown {
+                return;
+            }
+        }
+        last_times.insert(mapping_key.clone(), now);
+    }
 
     send_feedback(&hit, 1.0);
 
+    let action_type = hit.action_type.as_deref().unwrap_or("launch");
     match action_type {
         "stop" => {
             if let Some(proc_name) = &hit.target_process_name {
@@ -543,7 +657,7 @@ async fn execute_mapping(
                 if hit.forward_osc_args.unwrap_or(false) {
                     args.extend(osc_args.iter().map(|v| v.to_string().trim_matches('"').to_string()));
                 }
-                if let Ok(pid) = spawn_command(file, &args, hit.cwd.as_deref()) {
+                if let Ok((pid, mut child)) = spawn_command(file, &args, hit.cwd.as_deref()).await {
                     let mut procs = state.active_processes.lock().await;
                     let file_name = Path::new(file)
                         .file_name()
@@ -551,16 +665,62 @@ async fn execute_mapping(
                         .unwrap_or(file)
                         .to_string();
                     procs.insert(
-                        mapping_key,
+                        mapping_key.clone(),
                         ActiveProcessInfo {
                             key: file.clone(),
                             pid,
-                            name: file_name,
+                            name: file_name.clone(),
                             file: file.clone(),
                             start_time: now_millis(),
                         },
                     );
                     broadcast_active_processes(app, &procs);
+
+                    log_activity(
+                        app,
+                        &hit.address,
+                        &osc_args,
+                        hit.name.as_deref().unwrap_or(&file_name),
+                        file,
+                        &format!("Started (PID {})", pid),
+                        Some(pid),
+                    )
+                    .await;
+
+                    let app_clone = app.clone();
+                    let mapping_key_clone = mapping_key.clone();
+                    let hit_clone = hit.clone();
+                    let action_label = hit.name.as_deref().unwrap_or(&file_name).to_string();
+                    let file_path = file.clone();
+
+                    tokio::spawn(async move {
+                        let status = child.wait().await;
+                        let (exit_code, status_str) = match status {
+                            Ok(s) if s.success() => (0.0, "Finished (0)".to_string()),
+                            Ok(s) => (-1.0, format!("Exited ({})", s.code().unwrap_or(-1))),
+                            Err(e) => (-1.0, format!("Error: {}", e)),
+                        };
+
+                        let state = app_clone.state::<AppState>();
+                        {
+                            let mut p = state.active_processes.lock().await;
+                            p.remove(&mapping_key_clone);
+                            broadcast_active_processes(&app_clone, &p);
+                        }
+
+                        send_feedback(&hit_clone, exit_code);
+
+                        log_activity(
+                            &app_clone,
+                            &hit_clone.address,
+                            &[],
+                            &action_label,
+                            &file_path,
+                            &status_str,
+                            Some(pid),
+                        )
+                        .await;
+                    });
                 }
             }
         }
@@ -585,7 +745,11 @@ async fn execute_mapping(
                                             .map(|v| v.to_string().trim_matches('"').to_string()),
                                     );
                                 }
-                                let _ = spawn_command(file, &args, step.cwd.as_deref());
+                                if let Ok((_, mut child)) = spawn_command(file, &args, step.cwd.as_deref()).await {
+                                    tokio::spawn(async move {
+                                        let _ = child.wait().await;
+                                    });
+                                }
                             }
                         }
                         "osc" => {
@@ -630,7 +794,7 @@ async fn execute_mapping(
                 if hit.forward_osc_args.unwrap_or(false) {
                     args.extend(osc_args.iter().map(|v| v.to_string().trim_matches('"').to_string()));
                 }
-                if let Ok(pid) = spawn_command(file, &args, hit.cwd.as_deref()) {
+                if let Ok((pid, mut child)) = spawn_command(file, &args, hit.cwd.as_deref()).await {
                     let mut procs = state.active_processes.lock().await;
                     let file_name = Path::new(file)
                         .file_name()
@@ -638,16 +802,62 @@ async fn execute_mapping(
                         .unwrap_or(file)
                         .to_string();
                     procs.insert(
-                        mapping_key,
+                        mapping_key.clone(),
                         ActiveProcessInfo {
                             key: file.clone(),
                             pid,
-                            name: file_name,
+                            name: file_name.clone(),
                             file: file.clone(),
                             start_time: now_millis(),
                         },
                     );
                     broadcast_active_processes(app, &procs);
+
+                    log_activity(
+                        app,
+                        &hit.address,
+                        &osc_args,
+                        hit.name.as_deref().unwrap_or(&file_name),
+                        file,
+                        &format!("Started (PID {})", pid),
+                        Some(pid),
+                    )
+                    .await;
+
+                    let app_clone = app.clone();
+                    let mapping_key_clone = mapping_key.clone();
+                    let hit_clone = hit.clone();
+                    let action_label = hit.name.as_deref().unwrap_or(&file_name).to_string();
+                    let file_path = file.clone();
+
+                    tokio::spawn(async move {
+                        let status = child.wait().await;
+                        let (exit_code, status_str) = match status {
+                            Ok(s) if s.success() => (0.0, "Finished (0)".to_string()),
+                            Ok(s) => (-1.0, format!("Exited ({})", s.code().unwrap_or(-1))),
+                            Err(e) => (-1.0, format!("Error: {}", e)),
+                        };
+
+                        let state = app_clone.state::<AppState>();
+                        {
+                            let mut p = state.active_processes.lock().await;
+                            p.remove(&mapping_key_clone);
+                            broadcast_active_processes(&app_clone, &p);
+                        }
+
+                        send_feedback(&hit_clone, exit_code);
+
+                        log_activity(
+                            &app_clone,
+                            &hit_clone.address,
+                            &[],
+                            &action_label,
+                            &file_path,
+                            &status_str,
+                            Some(pid),
+                        )
+                        .await;
+                    });
                 }
             }
         }
@@ -660,6 +870,90 @@ fn broadcast_active_processes(
 ) {
     let list: Vec<ActiveProcessInfo> = procs.values().cloned().collect();
     let _ = app.emit("active-processes", list);
+}
+
+// Windows native autostart
+fn is_autostart_enabled() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let output = Command::new("reg")
+            .args(["query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", "/v", "OSC Launcher"])
+            .output();
+        output.map(|o| o.status.success()).unwrap_or(false)
+    }
+    #[cfg(not(target_os = "windows"))]
+    false
+}
+
+fn set_autostart(enable: bool) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        if enable {
+            let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            let exe_str = current_exe.to_string_lossy().to_string();
+            let value = format!("\"{}\" --minimized", exe_str);
+            let output = Command::new("reg")
+                .args([
+                    "add",
+                    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                    "/v",
+                    "OSC Launcher",
+                    "/t",
+                    "REG_SZ",
+                    "/d",
+                    &value,
+                    "/f",
+                ])
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !output.status.success() {
+                return Err(String::from_utf8_lossy(&output.stderr).to_string());
+            }
+        } else {
+            let _ = Command::new("reg")
+                .args([
+                    "delete",
+                    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                    "/v",
+                    "OSC Launcher",
+                    "/f",
+                ])
+                .output();
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    Ok(())
+}
+
+// Single-instance enforcement via local loopback port 42129
+fn check_single_instance(app_handle: &AppHandle) -> bool {
+    match UdpSocket::bind("127.0.0.1:42129") {
+        Ok(socket) => {
+            let handle = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut buf = [0u8; 32];
+                while let Ok((size, _)) = socket.recv_from(&mut buf) {
+                    if let Ok(cmd) = std::str::from_utf8(&buf[..size]) {
+                        if cmd.trim() == "show" {
+                            if let Some(w) = handle.get_webview_window("main") {
+                                let _ = w.unminimize();
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                        }
+                    }
+                }
+            });
+            true
+        }
+        Err(_) => {
+            if let Ok(client) = UdpSocket::bind("127.0.0.1:0") {
+                let _ = client.send_to(b"show", "127.0.0.1:42129");
+            }
+            false
+        }
+    }
 }
 
 // TAURI IPC COMMANDS
@@ -743,7 +1037,8 @@ async fn create_profile(
         *active = trimmed.clone();
     }
     save_store(&state);
-    let list: Vec<String> = state.profiles.lock().await.keys().cloned().collect();
+    let profiles = state.profiles.lock().await;
+    let list: Vec<String> = profiles.keys().cloned().collect();
     Ok(serde_json::json!({
         "ok": true,
         "active": trimmed,
@@ -761,20 +1056,18 @@ async fn delete_profile(
         return Err("Cannot delete the only remaining profile".to_string());
     }
     profiles.remove(&name);
-    let new_active = profiles.keys().next().cloned().unwrap_or_else(|| "Default".to_string());
     let mut active = state.active_profile.lock().await;
     if *active == name {
-        *active = new_active.clone();
+        *active = profiles.keys().next().cloned().unwrap_or_else(|| "Default".to_string());
     }
-    let list: Vec<String> = profiles.keys().cloned().collect();
-    let current_mappings = profiles.get(&*active).cloned().unwrap_or_default();
+    let new_active = active.clone();
+    let current_mappings = profiles.get(&new_active).cloned().unwrap_or_default();
     drop(profiles);
     drop(active);
     save_store(&state);
     Ok(serde_json::json!({
         "ok": true,
         "active": new_active,
-        "list": list,
         "mappings": current_mappings
     }))
 }
@@ -785,6 +1078,7 @@ async fn export_profile(
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     use tauri_plugin_dialog::DialogExt;
+
     let active = state.active_profile.lock().await.clone();
     let mappings = {
         let p = state.profiles.lock().await;
@@ -854,12 +1148,10 @@ async fn import_profile(
             *active = profile_name.clone();
         }
         save_store(&state);
-        let list: Vec<String> = state.profiles.lock().await.keys().cloned().collect();
 
         Ok(serde_json::json!({
             "ok": true,
             "active": profile_name,
-            "list": list,
             "mappings": mappings
         }))
     } else {
@@ -905,7 +1197,7 @@ async fn save_config(
 
     // Restart listener on new port
     state.is_listener_running.store(false, Ordering::SeqCst);
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
     start_osc_listener(app, port);
 
     Ok(serde_json::json!({ "ok": true, "port": port }))
@@ -916,8 +1208,9 @@ async fn get_startup_settings(
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     let c = state.config.lock().await;
+    let autostart = is_autostart_enabled();
     Ok(serde_json::json!({
-        "openAtLogin": false,
+        "openAtLogin": autostart,
         "startMinimized": c.start_minimized
     }))
 }
@@ -925,8 +1218,12 @@ async fn get_startup_settings(
 #[tauri::command]
 async fn set_startup_settings(
     state: State<'_, AppState>,
+    open_at_login: Option<bool>,
     start_minimized: Option<bool>,
 ) -> Result<bool, String> {
+    if let Some(open) = open_at_login {
+        let _ = set_autostart(open);
+    }
     if let Some(min) = start_minimized {
         let mut c = state.config.lock().await;
         c.start_minimized = min;
@@ -982,18 +1279,72 @@ async fn test_command(
     if let Some(custom) = args {
         cmd_args.extend(custom.split_whitespace().map(String::from));
     }
-    match spawn_command(&file, &cmd_args, cwd.as_deref()) {
-        Ok(pid) => Ok(serde_json::json!({
-            "ok": true,
-            "pid": pid,
-            "stillRunning": true,
-            "stdout": format!("Process started with PID: {}", pid)
-        })),
+    match spawn_command(&file, &cmd_args, cwd.as_deref()).await {
+        Ok((pid, mut child)) => {
+            tokio::spawn(async move {
+                let _ = child.wait().await;
+            });
+            Ok(serde_json::json!({
+                "ok": true,
+                "pid": pid,
+                "stillRunning": true,
+                "stdout": format!("Process started with PID: {}", pid)
+            }))
+        }
         Err(e) => Ok(serde_json::json!({
             "ok": false,
             "errorMessage": e
         })),
     }
+}
+
+#[tauri::command]
+async fn test_sequence(actions: Vec<SequenceStep>) -> Result<serde_json::Value, String> {
+    for step in actions {
+        match step.step_type.as_str() {
+            "delay" => {
+                let ms = step.delay_ms.unwrap_or(500);
+                tokio::time::sleep(tokio::time::Duration::from_millis(ms)).await;
+            }
+            "launch" => {
+                if let Some(file) = &step.file {
+                    let mut args = Vec::new();
+                    if let Some(custom) = &step.args {
+                        args.extend(custom.split_whitespace().map(String::from));
+                    }
+                    if let Ok((_, mut child)) = spawn_command(file, &args, step.cwd.as_deref()).await {
+                        tokio::spawn(async move {
+                            let _ = child.wait().await;
+                        });
+                    }
+                }
+            }
+            "osc" => {
+                if let Some(addr) = &step.address {
+                    let host = step.host.as_deref().unwrap_or("127.0.0.1");
+                    let port = step.port.as_ref().and_then(|p| p.as_u64()).unwrap_or(7000) as u16;
+                    let mut osc_types = Vec::new();
+                    if let Some(arg) = &step.args {
+                        if let Ok(i) = arg.parse::<i32>() {
+                            osc_types.push(OscType::Int(i));
+                        } else if let Ok(f) = arg.parse::<f32>() {
+                            osc_types.push(OscType::Float(f));
+                        } else if !arg.is_empty() {
+                            osc_types.push(OscType::String(arg.clone()));
+                        }
+                    }
+                    send_osc_packet(host, port, addr, osc_types);
+                }
+            }
+            "stop" => {
+                if let Some(proc_name) = &step.target_process_name {
+                    let _ = kill_process_by_name(proc_name).await;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(serde_json::json!({ "ok": true, "stdout": "Sequence test completed successfully" }))
 }
 
 #[tauri::command]
@@ -1067,17 +1418,36 @@ async fn open_external_url(url: String) -> Result<bool, String> {
     }
 }
 
+#[tauri::command]
+async fn get_activity_logs(state: State<'_, AppState>) -> Result<Vec<ActivityLogEntry>, String> {
+    let logs = state.activity_logs.lock().await;
+    Ok(logs.clone())
+}
+
+#[tauri::command]
+async fn clear_activity_logs(state: State<'_, AppState>) -> Result<bool, String> {
+    let mut logs = state.activity_logs.lock().await;
+    logs.clear();
+    Ok(true)
+}
+
 fn main() {
     let config_dir = get_config_dir();
     let store_path = config_dir.join("mappings.json");
 
     let initial_store: StoreFile = if store_path.exists() {
-        fs::read_to_string(&store_path)
-            .ok()
-            .and_then(|data| serde_json::from_str(&data).ok())
-            .unwrap_or_default()
+        match fs::read_to_string(&store_path) {
+            Ok(data) => match serde_json::from_str::<StoreFile>(&data) {
+                Ok(store) => store,
+                Err(err) => {
+                    eprintln!("[Store Error] Corrupted mappings.json: {}. Checking backups...", err);
+                    restore_from_latest_backup(&store_path).unwrap_or_default()
+                }
+            },
+            Err(_) => restore_from_latest_backup(&store_path).unwrap_or_default(),
+        }
     } else {
-        StoreFile::default()
+        restore_from_latest_backup(&store_path).unwrap_or_default()
     };
 
     let initial_port = initial_store.config.port;
@@ -1093,6 +1463,7 @@ fn main() {
         active_processes: Arc::new(Mutex::new(HashMap::new())),
         last_trigger_times: Arc::new(Mutex::new(HashMap::new())),
         is_listener_running: Arc::new(AtomicBool::new(false)),
+        activity_logs: Arc::new(Mutex::new(Vec::new())),
     };
 
     tauri::Builder::default()
@@ -1112,6 +1483,12 @@ fn main() {
             _ => {}
         })
         .setup(move |app| {
+            // Check single instance; if duplicate, signals existing window to show and exits
+            if !check_single_instance(&app.handle()) {
+                println!("[Single Instance] Application is already running. Focused existing window.");
+                std::process::exit(0);
+            }
+
             let handle = app.handle().clone();
 
             // Tray setup
@@ -1201,10 +1578,13 @@ fn main() {
             get_active_processes,
             kill_process,
             test_command,
+            test_sequence,
             open_file_dialog,
             open_config_location,
             get_config_path,
             open_external_url,
+            get_activity_logs,
+            clear_activity_logs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld("oscApi", {
   openConfigLocation: () => ipcRenderer.invoke("open-config-location"),
   getConfigPath: () => ipcRenderer.invoke("get-config-path"),
   openExternalUrl: (url) => ipcRenderer.invoke("open-external-url", url),
+  getActivityLogs: () => ipcRenderer.invoke("get-activity-logs"),
+  clearActivityLogs: () => ipcRenderer.invoke("clear-activity-logs"),
 
   onOscPacket: (callback) => {
     ipcRenderer.on("osc-packet", (_event, data) => callback(data));
@@ -32,5 +34,8 @@ contextBridge.exposeInMainWorld("oscApi", {
   },
   onActiveProcessesChanged: (callback) => {
     ipcRenderer.on("active-processes", (_event, list) => callback(list));
+  },
+  onActivityLog: (callback) => {
+    ipcRenderer.on("activity-log", (_event, data) => callback(data));
   },
 });

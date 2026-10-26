@@ -798,3 +798,53 @@ button.small {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--muted);
 }
+
+/* Activity Log Entry */
+.activity-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border-subtle);
+  line-height: 1.4;
+}
+.activity-entry:last-child {
+  border-bottom: none;
+}
+.activity-time {
+  color: var(--muted);
+  font-size: 0.72rem;
+  flex-shrink: 0;
+}
+.activity-addr {
+  color: var(--accent);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.activity-name {
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-status {
+  margin-left: auto;
+  font-size: 0.70rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--card-bg);
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.activity-status.started {
+  color: var(--accent);
+  background: var(--accent-subtle);
+}
+.activity-status.success {
+  color: var(--success);
+  background: var(--success-subtle);
+}
+.activity-status.error {
+  color: var(--danger);
+  background: var(--danger-subtle);
+}

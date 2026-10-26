@@ -37,6 +37,28 @@ const lastTriggerTimes = new Map();
 // Process tracking: Map<string, { key, pid, child, name, file, startTime }>
 const activeProcesses = new Map();
 
+// Activity log buffer (last 100 events)
+const activityLogs = [];
+const MAX_ACTIVITY_LOGS = 100;
+
+function logActivity(entry) {
+  const fullEntry = {
+    timestamp: entry.timestamp || new Date().toLocaleTimeString(),
+    address: entry.address || "",
+    args: entry.args || "",
+    actionName: entry.actionName || "",
+    status: entry.status || "started",
+    details: entry.details || "",
+  };
+  activityLogs.push(fullEntry);
+  if (activityLogs.length > MAX_ACTIVITY_LOGS) {
+    activityLogs.shift();
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("activity-log", fullEntry);
+  }
+}
+
 function broadcastActiveProcesses() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const list = Array.from(activeProcesses.values()).map((p) => ({
@@ -279,7 +301,7 @@ function runFile(filePath, userArgs = [], trackingKey = null, maxWaitMs = 0, cus
 
     let child;
     try {
-      child = spawn(cmd, args, { cwd: workingDir, windowsHide: false });
+      child = spawn(cmd, args, { cwd: workingDir, windowsHide: true });
     } catch (err) {
       return resolve({ ok: false, errorMessage: err.message });
     }
@@ -439,6 +461,13 @@ async function handleMappingTrigger(hit, rawArgs) {
   }
 
   sendFeedback(hit, 1); // State 1: Active/Started
+  logActivity({
+    address: hit.address,
+    args: rawArgs.map(String).join(", "),
+    actionName: hit.name || hit.address,
+    status: "started",
+    details: `Triggered ${actionType}`,
+  });
 
   let result;
   if (actionType === "stop") {
@@ -466,6 +495,13 @@ async function handleMappingTrigger(hit, rawArgs) {
       console.log(`[OSC Action] Toggle: currently running (PID ${proc.pid}), killing it.`);
       result = await killProcessTree(proc.pid);
       sendFeedback(hit, 0);
+      logActivity({
+        address: hit.address,
+        args: rawArgs.map(String).join(", "),
+        actionName: hit.name || hit.address,
+        status: "success",
+        details: `Toggled OFF (killed PID ${proc.pid})`,
+      });
       return result;
     } else {
       console.log(`[OSC Action] Toggle: currently stopped, launching.`);
@@ -487,8 +523,22 @@ async function handleMappingTrigger(hit, rawArgs) {
 
   if (result && !result.ok) {
     sendFeedback(hit, -1); // State -1: Error
+    logActivity({
+      address: hit.address,
+      args: rawArgs.map(String).join(", "),
+      actionName: hit.name || hit.address,
+      status: "error",
+      details: result.errorMessage || (result.stderr ? result.stderr.slice(0, 100) : "Execution failed"),
+    });
   } else {
     sendFeedback(hit, 0); // State 0: Completed/Idle
+    logActivity({
+      address: hit.address,
+      args: rawArgs.map(String).join(", "),
+      actionName: hit.name || hit.address,
+      status: "success",
+      details: result && result.stdout ? result.stdout.slice(0, 100).trim() : "Completed successfully",
+    });
   }
 
   return result;
@@ -707,6 +757,29 @@ ipcMain.handle("save-mappings", (e, cmds) => {
   profiles[activeProfileName] = cmds;
   store.set("profiles", profiles);
   store.set("commands", cmds);
+
+  // Rolling backup retention
+  try {
+    const backupDir = path.join(path.dirname(store.path), "backups");
+    if (!fs.existsSync(backupDir)) {
+      fs.mkdirSync(backupDir, { recursive: true });
+    }
+    const backupPath = path.join(backupDir, `mappings_${Date.now()}.json`);
+    fs.writeFileSync(backupPath, JSON.stringify(profiles, null, 2), "utf8");
+
+    // Maintain only last 10 backups
+    const files = fs.readdirSync(backupDir)
+      .filter((f) => f.startsWith("mappings_") && f.endsWith(".json"))
+      .sort();
+    if (files.length > 10) {
+      files.slice(0, files.length - 10).forEach((f) => {
+        try { fs.unlinkSync(path.join(backupDir, f)); } catch (_) {}
+      });
+    }
+  } catch (backupErr) {
+    console.warn("[Backup] Could not create rolling backup:", backupErr);
+  }
+
   return true;
 });
 
@@ -901,6 +974,13 @@ ipcMain.handle("test-command", async (e, { file, args = "", cwd = null }) => {
 // IPC: test sequence
 ipcMain.handle("test-sequence", async (e, { actions }) => {
   return await runSequence(actions || [], []);
+});
+
+// IPC: activity logs
+ipcMain.handle("get-activity-logs", () => activityLogs);
+ipcMain.handle("clear-activity-logs", () => {
+  activityLogs.length = 0;
+  return { ok: true };
 });
 
 app.on("window-all-closed", (e) => {

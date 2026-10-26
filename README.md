@@ -8,7 +8,12 @@ Built with a high-efficiency **Rust/Tauri v2 core** (with an Electron fallback d
 
 ## Key Features
 
-- **High-Performance UDP Engine**: Direct socket listening supporting OSC 1.0 addresses, wildcards (`*`, `?`, `[0-9]`, `{a,b}`), and recursive `#bundle` unpacking.
+- **Production Reliability & Zero-Downtime Design**:
+  - **Asynchronous IOCP UDP Engine**: Native Tokio UDP receiver yielding 0% idle CPU and zero polling latency jitter.
+  - **Console Window Suppression**: Scripts (`.bat`, `.cmd`, `.ps1`) execute with native `CREATE_NO_WINDOW` flags so no black terminal windows pop up over live video or lighting outputs.
+  - **Atomic Persistence & Rolling Backups**: Settings save atomically with automatic rolling backups (maintaining last 10 versions in `%APPDATA%\osc-launcher\backups\`) and automatic disaster recovery.
+  - **Single Instance Enforcement**: Prevents accidental port-binding collisions; launching a duplicate instance immediately focuses the running window.
+- **Live Activity Log & Diagnostics**: Real-time modal tracking the last 100 execution events (timestamp, address, argument payloads, action triggered, and exit codes) with one-click clipboard export.
 - **Action Types**:
   - **Launch Command**: Trigger `.bat`, `.cmd`, `.ps1`, or `.exe` files with custom arguments and optional working directory (`cwd`).
   - **Stop Process**: Clean process-tree termination (`taskkill /PID /T /F`) targeting specific launched tasks or executable names (e.g. `vlc.exe`).
@@ -89,6 +94,12 @@ Automate complex multi-step workflows from a single incoming trigger:
 - Click the **Tasks (x)** badge in the top bar to open the **Active Processes** monitor.
 - View PID, process name, elapsed execution time, and path for all currently running scripts.
 - Stop individual processes or click **Kill All** for immediate, clean process-tree termination.
+
+### Activity Log & Diagnostics
+- Click **Activity** in the top bar (or click anywhere on the **Live Monitor** bar at the bottom) to open the Activity Log modal.
+- Inspect the last 100 trigger events with timestamp, OSC address, payload parameters, action executed, and completion status (`Started`, `Finished (0)`, or error message).
+- Click **Copy Log** to instantly copy formatted logs for debugging or technical support.
+- Click **Clear Log** to reset the activity buffer.
 
 ### OSC Relays & Packet Forwarding
 Forward incoming OSC packets to secondary applications (e.g. Resolume, Reaper, lighting desks):
